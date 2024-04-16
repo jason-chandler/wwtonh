@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 )
@@ -19,4 +20,6 @@ func main() {
 	}
 	io.Copy(file,buf)
 	println("Completed.")
+
+	fmt.Printf("%+v", NewMSBT("./nh/TalkNNpc_USen/B1_Bo/Free/BO_FreeA_Always.msbt").Header)
 }

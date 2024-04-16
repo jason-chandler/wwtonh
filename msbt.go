@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"io"
 	"os"
+	"slices"
 )
 
 // Most of the following is borrowed from IcySon55's MSBTEditor
@@ -44,11 +45,9 @@ type Section struct {
 	Padding1 []byte // Always 0x0000 0000
 }
 
-type Entry interface  {
-	Value() []byte
-	SetValue(value []byte)
-	Index() uint32
-	SetIndex(index uint32)
+type Entry struct  {
+	Value []byte
+	Index uint32
 }
 
 type Group struct {
@@ -60,13 +59,13 @@ type LBL1 struct {
 	*Section
 	NumberOfGroups uint32
 	Groups []*Group
-	Labels []*Entry
+	Labels []*Label
 }
 
 type Label struct {
-	Entry
+	*Entry
 	Index uint32
-	Length uint32
+	Length byte
 	Name string
 	Checksum uint32
 }
@@ -83,6 +82,7 @@ type ATO1 struct {
 
 type ATR1 struct {
 	*Section
+	NumberOfAttributes uint32
 	Unknown2 []byte
 }
 
@@ -104,7 +104,7 @@ const LabelMaxLength uint32 = 64
 
 type MSBT struct {
 	File []byte
-	Head *Header
+	Header *Header
 	Lbl1 *LBL1
 	Nli1 *NLI1
 	Ato1 *ATO1
@@ -116,7 +116,7 @@ type MSBT struct {
 	HasLabels bool
 }
 
-func NewMSBT(filename string) {
+func NewMSBT(filename string) *MSBT {
 	f,err := os.Open(filename)
 	if err != nil {
 		panic(err)
@@ -141,7 +141,11 @@ func NewMSBT(filename string) {
 		sec := string(peekNBytes(f, 4))
 		switch sec {
 		case "LBL1":
-			lbl1 = readLbl1(f, header.Endianness)
+			var labelsFound bool
+			lbl1,labelsFound = readLbl1(f, header)
+			if labelsFound {
+				hasLabels = true
+			}
 			sectionOrder = append(sectionOrder, sec)
 		case "NLI1":
 			sectionOrder = append(sectionOrder, sec)
@@ -152,10 +156,33 @@ func NewMSBT(filename string) {
 		case "TSY1":
 			sectionOrder = append(sectionOrder, sec)
 		case "TXT2":
+			txt2 = readTxt2(f, header)
+			for _,lbl := range lbl1.Labels {
+				lbl.Entry = txt2.Strings[lbl.Index]
+			}
 			sectionOrder = append(sectionOrder, sec)
 		default:
 			panic("Invalid section found: " + sec)
 		}
+	}
+
+	var encoding Encoding
+	if header.EncodingByte == UTF8Byte {
+		encoding = UTF8
+	} else {
+		encoding = Unicode
+	}
+	return &MSBT {
+		Header: header,
+		Lbl1: lbl1,
+		Nli1: nli1,
+		Ato1: ato1,
+		Atr1: atr1,
+		Tsy1: tsy1,
+		Txt2: txt2,
+		Encoding: encoding,
+		SectionOrder: sectionOrder,
+		HasLabels: hasLabels,
 	}
 }
 
@@ -172,7 +199,9 @@ func peekNBytes(f *os.File, n int64) []byte {
 	}
 
 	peekVal := readNBytes(f, n)
-
+	println("fffff")
+	println(string(peekVal))
+	println("ffffff")
 	_, err = f.Seek(pos, io.SeekStart)
 	if err != nil {
 		panic(err)
@@ -233,7 +262,9 @@ func fileSize(f string) uint32 {
 	return uint32(fileInfo.Size())
 }
 
-func readLbl1(f *os.File, endianness binary.ByteOrder) *LBL1 {
+func readLbl1(f *os.File, header *Header) (*LBL1,bool) {
+	endianness := header.Endianness
+	hasLabels := false
 	lbl1 := &LBL1{}
 	binary.Read(f, endianness, lbl1.Identifier)
 	binary.Read(f, endianness, lbl1.SectionSize)
@@ -248,9 +279,132 @@ func readLbl1(f *os.File, endianness binary.ByteOrder) *LBL1 {
 		lbl1.Groups = append(lbl1.Groups, group)
 	}
 
+	lbl1.Labels = make([]*Label, 0)
 	for _,group := range lbl1.Groups {
 		f.Seek(labelStart + int64(group.Offset), 0)
-		
+
+		for _ = range group.NumberOfLabels {
+			label := &Label{}
+			binary.Read(f, endianness, label.Length)
+			label.Name = string(readNBytes(f, int64(label.Length)))
+			binary.Read(f, endianness, label.Index)
+			label.Checksum = uint32(slices.Index(lbl1.Groups, group))
+			lbl1.Labels = append(lbl1.Labels, label)
+		}
 	}
-	return lbl1
+
+	if len(lbl1.Labels) > 0 {
+		hasLabels = true
+	}
+
+	seekPastPadding(f)
+	return lbl1, hasLabels
+}
+
+func seekPastPadding(f *os.File) {
+	rem := currentSeek(f) % 16
+	if rem > 0 {
+		f.Seek(16 - rem, io.SeekCurrent)
+	}
+}
+
+func readNli1(f *os.File, header *Header) *NLI1 {
+	endianness := header.Endianness
+	nli1 := &NLI1{}
+	nli1.Identifier = string(readNBytes(f, 4))
+	binary.Read(f, endianness, nli1.SectionSize)
+	nli1.Padding1 = readNBytes(f, 8)
+	nli1.Unknown2 = readNBytes(f, int64(nli1.SectionSize))
+
+	return nli1
+}
+
+func readAto1(f *os.File, header *Header) *ATO1 {
+	endianness := header.Endianness
+	ato1 := &ATO1{}
+	ato1.Identifier = string(readNBytes(f, 4))
+	binary.Read(f, endianness, ato1.SectionSize)
+	ato1.Padding1 = readNBytes(f, 8)
+	ato1.Unknown2 = readNBytes(f, int64(ato1.SectionSize))
+
+	return ato1
+}
+
+func readAtr1(f *os.File, header *Header) *ATR1 {
+	endianness := header.Endianness
+	atr1 := &ATR1{}
+	atr1.Identifier = string(readNBytes(f, 4))
+	binary.Read(f, endianness, atr1.SectionSize)
+	atr1.Padding1 = readNBytes(f, 8)
+	binary.Read(f, endianness, atr1.NumberOfAttributes)
+	atr1.Unknown2 = readNBytes(f, int64(atr1.SectionSize))
+	seekPastPadding(f)
+
+	return atr1
+}
+
+func readTsy1(f *os.File, header *Header) *TSY1 {
+	endianness := header.Endianness
+	tsy1 := &TSY1{}
+	tsy1.Identifier = string(readNBytes(f, 4))
+	binary.Read(f, endianness, tsy1.SectionSize)
+	tsy1.Padding1 = readNBytes(f, 8)
+	tsy1.Unknown2 = readNBytes(f, int64(tsy1.SectionSize))
+	seekPastPadding(f)
+
+	return tsy1
+}
+
+func readTxt2(f *os.File, header *Header) *TXT2 {
+	endianness := header.Endianness
+	txt2 := &TXT2{}
+	txt2.Identifier = string(readNBytes(f, 4))
+	binary.Read(f, endianness, txt2.SectionSize)
+	txt2.Padding1 = readNBytes(f, 8)
+	startStrings := currentSeek(f)
+	binary.Read(f, endianness, txt2.NumberOfStrings)
+	offsets := make([]uint32, 0)
+
+	for _ = range txt2.NumberOfStrings {
+		var offset uint32
+		binary.Read(f, endianness, offset)
+		offsets = append(offsets, offset)
+	}
+
+	for i := range txt2.NumberOfStrings {
+		var nextOffset uint32
+		if i + 1 < uint32(len(offsets)) {
+			nextOffset = uint32(startStrings) + offsets[i + 1]
+		} else {
+			nextOffset = uint32(startStrings) + txt2.SectionSize
+		}
+
+		f.Seek(startStrings + int64(offsets[i]), io.SeekStart)
+
+		result := make([]byte, 0)
+
+		for {
+			j := uint32(currentSeek(f))
+			if j < nextOffset && j < header.FileSize {
+				if(header.EncodingByte == UTF8Byte) {
+					result = append(result, readNBytes(f, 1)[0])
+				} else {
+					var unibytes [2]byte
+					binary.Read(f, endianness, unibytes)
+					result = append(result, unibytes[:]...)
+				}
+			} else {
+				break
+			}
+		}
+
+		entry := &Entry{
+			Value: result,
+			Index: i,
+		}
+		txt2.Strings = append(txt2.Strings, entry)
+	}
+
+	seekPastPadding(f)
+	return txt2
 }
