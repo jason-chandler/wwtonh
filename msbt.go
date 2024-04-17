@@ -124,7 +124,7 @@ func NewMSBT(filename string) *MSBT {
 	defer f.Close()
 
 	header := makeHeader(f)
-	if header.FileSize == fileSize(filename) {
+	if header.FileSize != fileSize(filename) {
 		panic("Written filesize does not match actual filesize.")
 	}
 	var lbl1 *LBL1
@@ -148,12 +148,16 @@ func NewMSBT(filename string) *MSBT {
 			}
 			sectionOrder = append(sectionOrder, sec)
 		case "NLI1":
+			nli1 = readNli1(f, header)
 			sectionOrder = append(sectionOrder, sec)
 		case "ATO1":
+			ato1 = readAto1(f, header)
 			sectionOrder = append(sectionOrder, sec)
 		case "ATR1":
+			atr1 = readAtr1(f, header)
 			sectionOrder = append(sectionOrder, sec)
 		case "TSY1":
+			tsy1 = readTsy1(f, header)
 			sectionOrder = append(sectionOrder, sec)
 		case "TXT2":
 			txt2 = readTxt2(f, header)
@@ -199,9 +203,6 @@ func peekNBytes(f *os.File, n int64) []byte {
 	}
 
 	peekVal := readNBytes(f, n)
-	println("fffff")
-	println(string(peekVal))
-	println("ffffff")
 	_, err = f.Seek(pos, io.SeekStart)
 	if err != nil {
 		panic(err)
@@ -229,15 +230,16 @@ func makeHeader(f *os.File) *Header {
 	header := &Header{
 		Identifier: identifier,
 		ByteOrder: byteOrder,
+		Endianness: endianness,
 	}
 
-	binary.Read(f, endianness, header.Unknown1)
-	binary.Read(f, endianness, header.EncodingByte)
-	binary.Read(f, endianness, header.Unknown2)
-	binary.Read(f, endianness, header.NumberOfSections)
-	binary.Read(f, endianness, header.Unknown3)
+	binary.Read(f, endianness, &header.Unknown1)
+	binary.Read(f, endianness, &header.EncodingByte)
+	binary.Read(f, endianness, &header.Unknown2)
+	binary.Read(f, endianness, &header.NumberOfSections)
+	binary.Read(f, endianness, &header.Unknown3)
 	header.FileSizeOffset = currentSeek(f)
-	binary.Read(f, endianness, header.FileSize)
+	binary.Read(f, endianness, &header.FileSize)
 	header.Unknown4 = readNBytes(f, 10)
 
 	return header
@@ -265,17 +267,17 @@ func fileSize(f string) uint32 {
 func readLbl1(f *os.File, header *Header) (*LBL1,bool) {
 	endianness := header.Endianness
 	hasLabels := false
-	lbl1 := &LBL1{}
-	binary.Read(f, endianness, lbl1.Identifier)
-	binary.Read(f, endianness, lbl1.SectionSize)
+	lbl1 := &LBL1{ Section: &Section{} }
+	lbl1.Identifier = string(readNBytes(f, 4))
+	binary.Read(f, endianness, &lbl1.SectionSize)
 	lbl1.Padding1 = readNBytes(f, 8)
 	labelStart := currentSeek(f)
-	binary.Read(f, endianness, lbl1.NumberOfGroups)
+	binary.Read(f, endianness, &lbl1.NumberOfGroups)
 	lbl1.Groups = make([]*Group, 0)
 	for _ = range lbl1.NumberOfGroups {
 		group := &Group{}
-		binary.Read(f, endianness, group.NumberOfLabels)
-		binary.Read(f, endianness, group.Offset)
+		binary.Read(f, endianness, &group.NumberOfLabels)
+		binary.Read(f, endianness, &group.Offset)
 		lbl1.Groups = append(lbl1.Groups, group)
 	}
 
@@ -285,9 +287,9 @@ func readLbl1(f *os.File, header *Header) (*LBL1,bool) {
 
 		for _ = range group.NumberOfLabels {
 			label := &Label{}
-			binary.Read(f, endianness, label.Length)
+			binary.Read(f, endianness, &label.Length)
 			label.Name = string(readNBytes(f, int64(label.Length)))
-			binary.Read(f, endianness, label.Index)
+			binary.Read(f, endianness, &label.Index)
 			label.Checksum = uint32(slices.Index(lbl1.Groups, group))
 			lbl1.Labels = append(lbl1.Labels, label)
 		}
@@ -312,7 +314,7 @@ func readNli1(f *os.File, header *Header) *NLI1 {
 	endianness := header.Endianness
 	nli1 := &NLI1{}
 	nli1.Identifier = string(readNBytes(f, 4))
-	binary.Read(f, endianness, nli1.SectionSize)
+	binary.Read(f, endianness, &nli1.SectionSize)
 	nli1.Padding1 = readNBytes(f, 8)
 	nli1.Unknown2 = readNBytes(f, int64(nli1.SectionSize))
 
@@ -323,7 +325,7 @@ func readAto1(f *os.File, header *Header) *ATO1 {
 	endianness := header.Endianness
 	ato1 := &ATO1{}
 	ato1.Identifier = string(readNBytes(f, 4))
-	binary.Read(f, endianness, ato1.SectionSize)
+	binary.Read(f, endianness, &ato1.SectionSize)
 	ato1.Padding1 = readNBytes(f, 8)
 	ato1.Unknown2 = readNBytes(f, int64(ato1.SectionSize))
 
@@ -332,11 +334,11 @@ func readAto1(f *os.File, header *Header) *ATO1 {
 
 func readAtr1(f *os.File, header *Header) *ATR1 {
 	endianness := header.Endianness
-	atr1 := &ATR1{}
+	atr1 := &ATR1{ Section: &Section{} }
 	atr1.Identifier = string(readNBytes(f, 4))
-	binary.Read(f, endianness, atr1.SectionSize)
+	binary.Read(f, endianness, &atr1.SectionSize)
 	atr1.Padding1 = readNBytes(f, 8)
-	binary.Read(f, endianness, atr1.NumberOfAttributes)
+	binary.Read(f, endianness, &atr1.NumberOfAttributes)
 	atr1.Unknown2 = readNBytes(f, int64(atr1.SectionSize))
 	seekPastPadding(f)
 
@@ -345,9 +347,9 @@ func readAtr1(f *os.File, header *Header) *ATR1 {
 
 func readTsy1(f *os.File, header *Header) *TSY1 {
 	endianness := header.Endianness
-	tsy1 := &TSY1{}
+	tsy1 := &TSY1{ Section: &Section{} }
 	tsy1.Identifier = string(readNBytes(f, 4))
-	binary.Read(f, endianness, tsy1.SectionSize)
+	binary.Read(f, endianness, &tsy1.SectionSize)
 	tsy1.Padding1 = readNBytes(f, 8)
 	tsy1.Unknown2 = readNBytes(f, int64(tsy1.SectionSize))
 	seekPastPadding(f)
@@ -357,17 +359,17 @@ func readTsy1(f *os.File, header *Header) *TSY1 {
 
 func readTxt2(f *os.File, header *Header) *TXT2 {
 	endianness := header.Endianness
-	txt2 := &TXT2{}
+	txt2 := &TXT2{ Section: &Section{} }
 	txt2.Identifier = string(readNBytes(f, 4))
-	binary.Read(f, endianness, txt2.SectionSize)
+	binary.Read(f, endianness, &txt2.SectionSize)
 	txt2.Padding1 = readNBytes(f, 8)
 	startStrings := currentSeek(f)
-	binary.Read(f, endianness, txt2.NumberOfStrings)
+	binary.Read(f, endianness, &txt2.NumberOfStrings)
 	offsets := make([]uint32, 0)
 
 	for _ = range txt2.NumberOfStrings {
 		var offset uint32
-		binary.Read(f, endianness, offset)
+		binary.Read(f, endianness, &offset)
 		offsets = append(offsets, offset)
 	}
 
@@ -390,7 +392,7 @@ func readTxt2(f *os.File, header *Header) *TXT2 {
 					result = append(result, readNBytes(f, 1)[0])
 				} else {
 					var unibytes [2]byte
-					binary.Read(f, endianness, unibytes)
+					binary.Read(f, endianness, &unibytes)
 					result = append(result, unibytes[:]...)
 				}
 			} else {

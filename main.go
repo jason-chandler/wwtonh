@@ -22,4 +22,5 @@ func main() {
 	println("Completed.")
 
 	fmt.Printf("%+v", NewMSBT("./nh/TalkNNpc_USen/B1_Bo/Free/BO_FreeA_Always.msbt").Header)
+	fmt.Printf("%+v", NewMSBT("./nh/TalkNNpc_USen/B1_Bo/Free/BO_FreeA_Always.msbt"))
 }
