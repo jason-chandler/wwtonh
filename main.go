@@ -21,6 +21,16 @@ func main() {
 	io.Copy(file,buf)
 	println("Completed.")
 
-	fmt.Printf("%+v", NewMSBT("./nh/TalkNNpc_USen/B1_Bo/Free/BO_FreeA_Always.msbt").Header)
-	fmt.Printf("%+v", NewMSBT("./nh/TalkNNpc_USen/B1_Bo/Free/BO_FreeA_Always.msbt"))
+
+	msbt := NewMSBT("./nh/TalkNNpc_USen/B1_Bo/Free/BO_FreeA_Always.msbt")
+
+	writeMSBT(msbt, "./mousebt.msbt")
+
+	
+	for _,lbl := range msbt.Lbl1.Labels {
+		fmt.Println(lbl.Index)
+		fmt.Println(string(lbl.Value))
+	}
+	//fmt.Printf("%+v", NewMSBT("./nh/TalkNNpc_USen/B1_Bo/Free/BO_FreeA_Always.msbt").Header)
+	//fmt.Printf("%+v", NewMSBT("./nh/TalkNNpc_USen/B1_Bo/Free/BO_FreeA_Always.msbt"))
 }

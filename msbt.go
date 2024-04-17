@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/binary"
 	"io"
 	"os"
@@ -25,22 +26,25 @@ const (
 
 const expectedIdentifier = "MsgStdBn"
 
+type Info struct {
+	FileSizeOffset int64
+	Endianness binary.ByteOrder
+}
+
 type Header struct {
-	Identifier string // MsgStdBn
-	ByteOrder []byte
+	Identifier [8]byte // MsgStdBn
+	ByteOrder [2]byte
 	Unknown1 uint16 // Always 0x0000
 	EncodingByte EncodingByte
 	Unknown2 byte // Always 0x03
 	NumberOfSections uint16
 	Unknown3 uint16 // Always 0x0000
 	FileSize uint32
-	Unknown4 []byte // Always 0x0000 0000 0000 0000 0000
-	FileSizeOffset int64
-	Endianness binary.ByteOrder
+	Unknown4 [10]byte // Always 0x0000 0000 0000 0000 0000
 }
 
 type Section struct {
-	Identifier string
+	Identifier []byte
 	SectionSize uint32
 	Padding1 []byte // Always 0x0000 0000
 }
@@ -66,7 +70,7 @@ type Label struct {
 	*Entry
 	Index uint32
 	Length byte
-	Name string
+	Name []byte
 	Checksum uint32
 }
 
@@ -105,6 +109,7 @@ const LabelMaxLength uint32 = 64
 type MSBT struct {
 	File []byte
 	Header *Header
+	Info *Info
 	Lbl1 *LBL1
 	Nli1 *NLI1
 	Ato1 *ATO1
@@ -112,7 +117,7 @@ type MSBT struct {
 	Tsy1 *TSY1
 	Txt2 *TXT2
 	Encoding Encoding
-	SectionOrder []string
+	SectionOrder [][]byte
 	HasLabels bool
 }
 
@@ -123,7 +128,7 @@ func NewMSBT(filename string) *MSBT {
 	}
 	defer f.Close()
 
-	header := makeHeader(f)
+	header,info := makeHeader(f)
 	if header.FileSize != fileSize(filename) {
 		panic("Written filesize does not match actual filesize.")
 	}
@@ -136,10 +141,10 @@ func NewMSBT(filename string) *MSBT {
 	hasLabels := false
 	
 	// LabelFilter := regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
-	sectionOrder := make([]string, 0)
+	sectionOrder := make([][]byte, 0)
 	for _ = range header.NumberOfSections {
-		sec := string(peekNBytes(f, 4))
-		switch sec {
+		sec := peekNBytes(f, 4)
+		switch string(sec) {
 		case "LBL1":
 			var labelsFound bool
 			lbl1,labelsFound = readLbl1(f, header)
@@ -166,7 +171,7 @@ func NewMSBT(filename string) *MSBT {
 			}
 			sectionOrder = append(sectionOrder, sec)
 		default:
-			panic("Invalid section found: " + sec)
+			panic("Invalid section found: " + string(sec))
 		}
 	}
 
@@ -178,6 +183,7 @@ func NewMSBT(filename string) *MSBT {
 	}
 	return &MSBT {
 		Header: header,
+		Info: info,
 		Lbl1: lbl1,
 		Nli1: nli1,
 		Ato1: ato1,
@@ -211,38 +217,60 @@ func peekNBytes(f *os.File, n int64) []byte {
 	return peekVal
 }
 
-func makeHeader(f *os.File) *Header {
-	identifBuf := readNBytes(f, 8)
-	identifier := string(identifBuf[:])
+func writeNBytes(f *os.File, b []byte) {
+	_,err := f.Write(b)
 
-	if identifier != expectedIdentifier {
+	if err != nil {
+		panic(err)
+	}
+}
+
+
+func makeHeader(f *os.File) (*Header,*Info) {
+	identifier := readNBytes(f, 8)
+
+	if string(identifier) != expectedIdentifier {
 		panic("Incorrect file type read as MSBT")
 	}
 
 	byteOrder := readNBytes(f, 2)
+
+
+	header := &Header{
+		Identifier: ([8]byte)(identifier),
+		ByteOrder: ([2]byte)(byteOrder),
+	}
+
+	endianness := endianness(header.ByteOrder)
+
+
+		
+	
+	binary.Read(f, endianness, &header.Unknown1)
+	binary.Read(f, endianness, &header.EncodingByte)
+	binary.Read(f, endianness, &header.Unknown2)
+	binary.Read(f, endianness, &header.NumberOfSections)
+	binary.Read(f, endianness, &header.Unknown3)
+
+	info := &Info{
+		FileSizeOffset: currentSeek(f),
+		Endianness: endianness,
+	}
+
+	binary.Read(f, endianness, &header.FileSize)
+	header.Unknown4 = ([10]byte)(readNBytes(f, 10))
+
+	return header,info
+}
+
+func endianness(byteOrder [2]byte) binary.ByteOrder {
 	var endianness binary.ByteOrder
 	if byteOrder[0] > byteOrder[1] {
 		endianness = binary.LittleEndian
 	} else {
 		endianness = binary.BigEndian
 	}
-
-	header := &Header{
-		Identifier: identifier,
-		ByteOrder: byteOrder,
-		Endianness: endianness,
-	}
-
-	binary.Read(f, endianness, &header.Unknown1)
-	binary.Read(f, endianness, &header.EncodingByte)
-	binary.Read(f, endianness, &header.Unknown2)
-	binary.Read(f, endianness, &header.NumberOfSections)
-	binary.Read(f, endianness, &header.Unknown3)
-	header.FileSizeOffset = currentSeek(f)
-	binary.Read(f, endianness, &header.FileSize)
-	header.Unknown4 = readNBytes(f, 10)
-
-	return header
+	return endianness
 }
 
 func currentSeek(f *os.File) int64 {
@@ -256,19 +284,19 @@ func currentSeek(f *os.File) int64 {
 }
 
 func fileSize(f string) uint32 {
-	fileInfo, err := os.Stat(f)
+	fileStat, err := os.Stat(f)
 	if err != nil {
 		panic(err)
 	}
 
-	return uint32(fileInfo.Size())
+	return uint32(fileStat.Size())
 }
 
 func readLbl1(f *os.File, header *Header) (*LBL1,bool) {
-	endianness := header.Endianness
+	endianness := endianness(header.ByteOrder)
 	hasLabels := false
 	lbl1 := &LBL1{ Section: &Section{} }
-	lbl1.Identifier = string(readNBytes(f, 4))
+	lbl1.Identifier = readNBytes(f, 4)
 	binary.Read(f, endianness, &lbl1.SectionSize)
 	lbl1.Padding1 = readNBytes(f, 8)
 	labelStart := currentSeek(f)
@@ -288,7 +316,7 @@ func readLbl1(f *os.File, header *Header) (*LBL1,bool) {
 		for _ = range group.NumberOfLabels {
 			label := &Label{}
 			binary.Read(f, endianness, &label.Length)
-			label.Name = string(readNBytes(f, int64(label.Length)))
+			label.Name = readNBytes(f, int64(label.Length))
 			binary.Read(f, endianness, &label.Index)
 			label.Checksum = uint32(slices.Index(lbl1.Groups, group))
 			lbl1.Labels = append(lbl1.Labels, label)
@@ -303,6 +331,45 @@ func readLbl1(f *os.File, header *Header) (*LBL1,bool) {
 	return lbl1, hasLabels
 }
 
+func writeLbl1(f *os.File, msbt *MSBT) {
+	endianness := msbt.Info.Endianness
+	hasLabels := msbt.HasLabels
+	lbl1 := msbt.Lbl1
+	writeNBytes(f, lbl1.Identifier)
+	binary.Write(f, endianness, lbl1.SectionSize)
+	binary.Write(f, endianness, lbl1.Padding1)
+	labelStart := currentSeek(f)
+	binary.Write(f, endianness, lbl1.NumberOfGroups)
+	// lbl1.Groups = make([]*Group, 0)
+	for _,group := range lbl1.Groups {
+		binary.Write(f, endianness, &group.NumberOfLabels)
+		binary.Write(f, endianness, &group.Offset)
+	}
+
+	for _,group := range lbl1.Groups {
+		f.Seek(labelStart + int64(group.Offset), 0)
+
+		for _ = range group.NumberOfLabels {
+			label := &Label{}
+			binary.Read(f, endianness, &label.Length)
+			label.Name = readNBytes(f, int64(label.Length))
+			binary.Read(f, endianness, &label.Index)
+			label.Checksum = uint32(slices.Index(lbl1.Groups, group))
+			lbl1.Labels = append(lbl1.Labels, label)
+		}
+	}
+
+	if len(lbl1.Labels) > 0 {
+		hasLabels = true
+	}
+
+	seekPastPadding(f)
+	return lbl1, hasLabels
+}
+
+
+
+
 func seekPastPadding(f *os.File) {
 	rem := currentSeek(f) % 16
 	if rem > 0 {
@@ -311,33 +378,33 @@ func seekPastPadding(f *os.File) {
 }
 
 func readNli1(f *os.File, header *Header) *NLI1 {
-	endianness := header.Endianness
+	endianness := endianness(header.ByteOrder)
 	nli1 := &NLI1{}
-	nli1.Identifier = string(readNBytes(f, 4))
+	nli1.Identifier = ([4]byte)(readNBytes(f, 4))
 	binary.Read(f, endianness, &nli1.SectionSize)
-	nli1.Padding1 = readNBytes(f, 8)
+	nli1.Padding1 = ([8]byte)(readNBytes(f, 8))
 	nli1.Unknown2 = readNBytes(f, int64(nli1.SectionSize))
 
 	return nli1
 }
 
 func readAto1(f *os.File, header *Header) *ATO1 {
-	endianness := header.Endianness
+	endianness := endianness(header.ByteOrder)
 	ato1 := &ATO1{}
-	ato1.Identifier = string(readNBytes(f, 4))
+	ato1.Identifier = ([4]byte)(readNBytes(f, 4))
 	binary.Read(f, endianness, &ato1.SectionSize)
-	ato1.Padding1 = readNBytes(f, 8)
+	ato1.Padding1 = ([8]byte)(readNBytes(f, 8))
 	ato1.Unknown2 = readNBytes(f, int64(ato1.SectionSize))
 
 	return ato1
 }
 
 func readAtr1(f *os.File, header *Header) *ATR1 {
-	endianness := header.Endianness
+	endianness := endianness(header.ByteOrder)
 	atr1 := &ATR1{ Section: &Section{} }
-	atr1.Identifier = string(readNBytes(f, 4))
+	atr1.Identifier = ([4]byte)(readNBytes(f, 4))
 	binary.Read(f, endianness, &atr1.SectionSize)
-	atr1.Padding1 = readNBytes(f, 8)
+	atr1.Padding1 = ([8]byte)(readNBytes(f, 8))
 	binary.Read(f, endianness, &atr1.NumberOfAttributes)
 	atr1.Unknown2 = readNBytes(f, int64(atr1.SectionSize))
 	seekPastPadding(f)
@@ -346,11 +413,11 @@ func readAtr1(f *os.File, header *Header) *ATR1 {
 }
 
 func readTsy1(f *os.File, header *Header) *TSY1 {
-	endianness := header.Endianness
+	endianness := endianness(header.ByteOrder)
 	tsy1 := &TSY1{ Section: &Section{} }
-	tsy1.Identifier = string(readNBytes(f, 4))
+	tsy1.Identifier = ([4]byte)(readNBytes(f, 4))
 	binary.Read(f, endianness, &tsy1.SectionSize)
-	tsy1.Padding1 = readNBytes(f, 8)
+	tsy1.Padding1 = ([8]byte)(readNBytes(f, 8))
 	tsy1.Unknown2 = readNBytes(f, int64(tsy1.SectionSize))
 	seekPastPadding(f)
 
@@ -358,11 +425,11 @@ func readTsy1(f *os.File, header *Header) *TSY1 {
 }
 
 func readTxt2(f *os.File, header *Header) *TXT2 {
-	endianness := header.Endianness
+	endianness := endianness(header.ByteOrder)
 	txt2 := &TXT2{ Section: &Section{} }
-	txt2.Identifier = string(readNBytes(f, 4))
+	txt2.Identifier = ([4]byte)(readNBytes(f, 4))
 	binary.Read(f, endianness, &txt2.SectionSize)
-	txt2.Padding1 = readNBytes(f, 8)
+	txt2.Padding1 = ([8]byte)(readNBytes(f, 8))
 	startStrings := currentSeek(f)
 	binary.Read(f, endianness, &txt2.NumberOfStrings)
 	offsets := make([]uint32, 0)
@@ -409,4 +476,46 @@ func readTxt2(f *os.File, header *Header) *TXT2 {
 
 	seekPastPadding(f)
 	return txt2
+}
+
+func writeMSBT(msbt *MSBT, outFile string) {
+	f,e := os.Create(outFile)
+	if e != nil {
+		panic(e)
+	}
+	defer f.Close()
+
+	writer := bufio.NewWriter(f)
+	defer writer.Flush()
+
+	err := binary.Write(writer, msbt.Info.Endianness, msbt.Header)
+	if err != nil {
+		panic(err)
+	}
+
+	for _,sec := range msbt.SectionOrder {
+		switch string(sec) {
+		case "LBL1":
+			err = binary.Write(writer, msbt.Info.Endianness, msbt.Lbl1)
+		case "NLI1":
+			err = binary.Write(writer, msbt.Info.Endianness, msbt.Nli1)
+		case "ATO1":
+			err = binary.Write(writer, msbt.Info.Endianness, msbt.Ato1)
+		case "ATR1":
+			err = binary.Write(writer, msbt.Info.Endianness, msbt.Atr1)
+		case "TSY1":
+			err = binary.Write(writer, msbt.Info.Endianness, msbt.Tsy1)
+		case "TXT2":
+			err = binary.Write(writer, msbt.Info.Endianness, msbt.Txt2)
+		default:
+			panic("Invalid section found: " + string(sec))
+		}
+		if err != nil {
+			panic(err)
+		}
+
+	}
+
+	
+
 }
