@@ -355,6 +355,51 @@ func writeLbl1(f *os.File, msbt *MSBT) {
 	writePadding(f)
 }
 
+func writeNli1(f *os.File, msbt *MSBT) {
+	endianness := msbt.Info.Endianness
+	nli1 := msbt.Nli1
+	binary.Write(f, endianness, &nli1.Identifier)
+	binary.Write(f, endianness, &nli1.SectionSize)
+	binary.Write(f, endianness, &nli1.Padding1)
+	binary.Write(f, endianness, &nli1.Unknown2)
+}
+
+func writeAto1(f *os.File, msbt *MSBT) {
+	endianness := msbt.Info.Endianness
+	ato1 := msbt.Ato1
+	binary.Write(f, endianness, &ato1.Identifier)
+	binary.Write(f, endianness, &ato1.SectionSize)
+	binary.Write(f, endianness, &ato1.Padding1)
+	binary.Write(f, endianness, &ato1.Unknown2)
+}
+
+func writeAtr1(f *os.File, msbt *MSBT) {
+	endianness := msbt.Info.Endianness
+	atr1 := msbt.Atr1
+	binary.Write(f, endianness, &atr1.Identifier)
+	binary.Write(f, endianness, &atr1.SectionSize)
+	binary.Write(f, endianness, &atr1.Padding1)
+	binary.Write(f, endianness, &atr1.NumberOfAttributes)
+	binary.Write(f, endianness, &atr1.Unknown2)
+
+	writePadding(f)
+}
+
+func writeTsy1(f *os.File, msbt *MSBT) {
+	endianness := msbt.Info.Endianness
+	tsy1 := msbt.Tsy1
+	binary.Write(f, endianness, &tsy1.Identifier)
+	binary.Write(f, endianness, &tsy1.SectionSize)
+	binary.Write(f, endianness, &tsy1.Padding1)
+	binary.Write(f, endianness, &tsy1.Unknown2)
+
+	writePadding(f)
+}
+
+func writeTxt2(f *os.File, msbt *MSBT) {
+
+}
+
 func seekPastPadding(f *os.File) {
 	rem := currentSeek(f) % 16
 	if rem > 0 {
@@ -494,15 +539,15 @@ func writeMSBT(msbt *MSBT, outFile string) {
 		case "LBL1":
 			writeLbl1(f, msbt)
 		case "NLI1":
-			//err = binary.Write(writer, msbt.Info.Endianness, msbt.Nli1)
+			writeNli1(f, msbt)
 		case "ATO1":
-			//err = binary.Write(writer, msbt.Info.Endianness, msbt.Ato1)
+			writeAto1(f, msbt)
 		case "ATR1":
-			//err = binary.Write(writer, msbt.Info.Endianness, msbt.Atr1)
+			writeAtr1(f, msbt)
 		case "TSY1":
-			//err = binary.Write(writer, msbt.Info.Endianness, msbt.Tsy1)
+			writeTsy1(f, msbt)
 		case "TXT2":
-			//err = binary.Write(writer, msbt.Info.Endianness, msbt.Txt2)
+			writeTxt2(f, msbt)
 		default:
 			panic("Invalid section found: " + string(sec))
 		}
