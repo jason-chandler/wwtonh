@@ -397,7 +397,27 @@ func writeTsy1(f *os.File, msbt *MSBT) {
 }
 
 func writeTxt2(f *os.File, msbt *MSBT) {
+	endianness := msbt.Info.Endianness
+	txt2 := msbt.Txt2
+	binary.Write(f, endianness, &txt2.Identifier)
+	binary.Write(f, endianness, &txt2.SectionSize)
+	binary.Write(f, endianness, &txt2.Padding1)
+	start := uint32(currentSeek(f))
+	binary.Write(f, endianness, &txt2.NumberOfStrings)
 
+	stringPos := uint32(currentSeek(f)) + uint32(4*txt2.NumberOfStrings)
+
+	for i := range txt2.NumberOfStrings {
+		stringOffset := stringPos - start
+		binary.Write(f, endianness, stringOffset)
+		stringPos = stringPos + uint32(len(txt2.Strings[i].Value))
+	}
+
+	for i := range txt2.NumberOfStrings {
+		binary.Write(f, endianness, &txt2.Strings[i].Value)
+	}
+
+	writePadding(f)
 }
 
 func seekPastPadding(f *os.File) {
